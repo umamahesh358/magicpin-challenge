@@ -1,0 +1,29 @@
+# Environment & secrets
+.env
+*.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Dataset expanded (too large, not needed for deployment)
+dataset/expanded/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs & temp
+*.log
+*.jsonl
+score_submission.py
+preview.py
+generate_submission.py
