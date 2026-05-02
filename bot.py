@@ -125,7 +125,7 @@ RULES (zero tolerance):
 7. RATIONALE: A single plain string (not JSON) naming: the compulsion lever, the anchor fact used, and trigger fit reason.
 
 Return ONLY valid JSON with exactly these string keys:
-{"body": "...", "cta": "binary_yes_no|open_ended|multi_choice_slot|none", "send_as": "vera|merchant_on_behalf", "suppression_key": "...", "rationale": "single plain string here"}"""
+{"body": "...", "cta": "binary_yes_no OR open_ended OR multi_choice_slot OR none", "send_as": "vera (if messaging the merchant) OR merchant_on_behalf (if messaging a customer)", "suppression_key": "...", "rationale": "single plain string here"}"""
 
 
 def compose(category: dict, merchant: dict, trigger: dict, customer: dict | None = None) -> dict:
