@@ -185,9 +185,10 @@ async def tick(request: Request):
 async def reply(request: Request):
     body = await request.json()
 
-    conv_id    = body.get("conversation_id", "")
+    conv_id      = body.get("conversation_id", "")
     merchant_msg = body.get("message", "")
-    
+    merchant_id  = body.get("merchant_id", "")
+
     conv = store["conversations"].get(conv_id)
     if not conv:
         conv = {"history": [], "suppressed": False}
@@ -199,10 +200,13 @@ async def reply(request: Request):
 
     history = conv.get("history", [])
 
+    # Pull merchant context to give LLM specificity
+    merchant_ctx = store["merchants"].get(merchant_id, {}).get("payload", {})
+
     # Use the robust LLM and intent handler in bot.py
     from bot import handle_reply
-    result = handle_reply(history, merchant_msg)
-    
+    result = handle_reply(history, merchant_msg, merchant_ctx)
+
     # Update state based on what handle_reply did
     if result.get("action") == "end":
         conv["suppressed"] = True
@@ -210,7 +214,7 @@ async def reply(request: Request):
         history.append({"msg": merchant_msg, "auto_reply": True})
     else:
         history.append({"msg": merchant_msg, "auto_reply": False})
-        
+
     return result
 
 

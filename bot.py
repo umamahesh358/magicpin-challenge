@@ -220,8 +220,9 @@ HOSTILE_SIGNALS = [
     "mat karo", "band karo", "nahi chahiye", "bothering", "annoying"
 ]
 
-def handle_reply(history: list, merchant_message: str) -> dict:
+def handle_reply(history: list, merchant_message: str, merchant_ctx: dict = None) -> dict:
     msg_lower = merchant_message.lower()
+    merchant_ctx = merchant_ctx or {}
 
     # 1. Hostile / STOP detection (Priority 1)
     words = set(msg_lower.replace(",", " ").replace(".", " ").split())
@@ -234,7 +235,7 @@ def handle_reply(history: list, merchant_message: str) -> dict:
     # 2. Auto-reply detection
     if any(sig in msg_lower for sig in AUTO_REPLY_SIGNATURES):
         auto_count = sum(1 for h in history if h.get("auto_reply"))
-        if auto_count >= 1: # Second auto-reply -> terminate immediately (prevent loop)
+        if auto_count >= 1:
             return {
                 "action": "end",
                 "rationale": "Consecutive auto-replies detected. Terminating to prevent loop."
@@ -246,38 +247,75 @@ def handle_reply(history: list, merchant_message: str) -> dict:
             "rationale": "First auto-reply detected. Sent human prompt."
         }
 
-    # 3. Dynamic LLM response for slots/custom replies
-    try:
-        prompt = f"""You are Vera, a WhatsApp AI assistant for Indian merchants.
-The user just replied: "{merchant_message}"
+    # 3. Build merchant-specific context snippet for the prompt
+    identity   = merchant_ctx.get("identity", {})
+    perf       = merchant_ctx.get("performance", {})
+    sub        = merchant_ctx.get("subscription", {})
+    offers     = merchant_ctx.get("offers", [])
+    cat_slug   = merchant_ctx.get("category_slug", "")
 
-Rules:
-1. Respond in natural Hinglish.
-2. If they mention a specific slot/date/action (e.g. "book me for Wed 5 Nov"), specifically acknowledge that detail in your reply (e.g. "Wed 5 Nov, 6pm confirmed").
-3. If it's a generic 'yes', say you are initiating the process.
-4. Keep it very short (1-2 sentences).
-5. Output ONLY JSON with these exact keys: {{"action": "send", "body": "...", "cta": "open_ended", "rationale": "..."}}
+    owner_name   = identity.get("owner_first_name", "")
+    clinic_name  = identity.get("name", "")
+    city         = identity.get("city", "")
+    locality     = identity.get("locality", "")
+    ctr          = perf.get("ctr", None)
+    plan         = sub.get("plan", "")
+    days_left    = sub.get("days_remaining", None)
+    offer_titles = [o.get("title", "") for o in offers[:2]]
+
+    merchant_facts = []
+    if owner_name:   merchant_facts.append(f"Owner first name: {owner_name}")
+    if clinic_name:  merchant_facts.append(f"Business name: {clinic_name}")
+    if city and locality: merchant_facts.append(f"Location: {locality}, {city}")
+    if ctr:          merchant_facts.append(f"Current CTR: {ctr*100:.1f}% (peer avg ~3.0% — they are underperforming)")
+    if plan:         merchant_facts.append(f"Subscription: {plan} plan, {days_left} days remaining")
+    if offer_titles: merchant_facts.append(f"Active offers: {', '.join(offer_titles)}")
+    if cat_slug:     merchant_facts.append(f"Category: {cat_slug}")
+
+    context_block = "\n".join(merchant_facts) if merchant_facts else "No merchant context available."
+
+    # 4. Dynamic LLM response with rich context
+    try:
+        prompt = f"""You are Vera, a sharp WhatsApp sales AI for Indian merchants on Magicpin.
+You are replying to a merchant's WhatsApp message in an ongoing conversation.
+
+MERCHANT CONTEXT:
+{context_block}
+
+MERCHANT JUST SAID: "{merchant_message}"
+
+YOUR TASK:
+- Reply in natural Hinglish (mix of Hindi + English), warm but professional.
+- Be SPECIFIC: reference their actual data above (CTR, city, plan, offers) where relevant.
+- If they mention a specific date/time slot, CONFIRM that exact slot in your reply.
+- If they asked a question or need help with something, give a concrete next step — do NOT just ask "kya aap aage badhna chahte hain?".
+- Use urgency or social proof if relevant (e.g. "aapka plan sirf {days_left} din mein expire ho raha hai").
+- Keep it short: 1-3 sentences max.
+- Be compelling: give them a reason to act NOW.
+
+OUTPUT: ONLY a JSON object with exactly these keys:
+{{"action": "send", "body": "...", "cta": "open_ended", "rationale": "one-line reason"}}
 """
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            temperature=0.2,
-            max_tokens=150,
+            temperature=0.3,
+            max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
         )
-        
+
         out = response.choices[0].message.content.strip()
         if out.startswith("```"):
             out = out.split("```")[1]
             if out.startswith("json"): out = out[4:]
             out = out.strip()
-            
+
         result = json.loads(out)
-        result["action"] = "send" # Ensure it always sends
+        result["action"] = "send"
         return result
-    except Exception as e:
+    except Exception:
         return {
             "action": "send",
-            "body": "Done! Main aage ka process karti hoon.",
+            "body": "Samajh gaya! Aage badhte hain — main abhi process shuru karti hoon.",
             "cta": "open_ended",
             "rationale": "Fallback reply due to LLM error."
         }
