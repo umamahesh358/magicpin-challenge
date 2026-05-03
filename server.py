@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from bot import compose, respond  # our existing logic
+from bot import compose
 
 # ─────────────────────────────────────────────
 # In-memory store
@@ -187,9 +187,11 @@ async def reply(request: Request):
 
     conv_id    = body.get("conversation_id", "")
     merchant_msg = body.get("message", "")
-    turn_number  = body.get("turn_number", 1)
-
-    conv = store["conversations"].get(conv_id, {})
+    
+    conv = store["conversations"].get(conv_id)
+    if not conv:
+        conv = {"history": [], "suppressed": False}
+        store["conversations"][conv_id] = conv
 
     # Mark suppressed if needed
     if conv.get("suppressed"):
@@ -197,81 +199,19 @@ async def reply(request: Request):
 
     history = conv.get("history", [])
 
-    # === AUTO-REPLY DETECTION ===
-    auto_reply_phrases = [
-        "thank you for contacting",
-        "our team will respond",
-        "automated assistant",
-        "aapki jaankari ke liye shukriya",
-    ]
-    is_auto_reply = any(phrase in merchant_msg.lower() for phrase in auto_reply_phrases)
-
-    if is_auto_reply:
-        if len(history) >= 1 and history[-1].get("auto_reply"):
-            # Second auto-reply in a row → wait 24h
-            history.append({"msg": merchant_msg, "auto_reply": True})
-            if len([h for h in history if h.get("auto_reply")]) >= 3:
-                conv["suppressed"] = True
-                return {
-                    "action": "end",
-                    "rationale": "Auto-reply 3x in a row — no real engagement. Closing conversation."
-                }
-            return {
-                "action": "wait",
-                "wait_seconds": 86400,
-                "rationale": "Same auto-reply twice → owner not at phone. Waiting 24h before retry."
-            }
-        history.append({"msg": merchant_msg, "auto_reply": True})
-        return {
-            "action": "send",
-            "body": "Lagta hai auto-reply hai 😊 Jab owner dekhe, bas 'YES' type karein to proceed.",
-            "cta": "binary_yes_no",
-            "rationale": "Detected auto-reply; one prompt to flag for owner."
-        }
-
-    # === HOSTILE DETECTION ===
-    hostile_phrases = ["stop messaging", "not interested", "useless", "spam", "don't message"]
-    is_hostile = any(phrase in merchant_msg.lower() for phrase in hostile_phrases)
-    if is_hostile:
+    # Use the robust LLM and intent handler in bot.py
+    from bot import handle_reply
+    result = handle_reply(history, merchant_msg)
+    
+    # Update state based on what handle_reply did
+    if result.get("action") == "end":
         conv["suppressed"] = True
-        return {
-            "action": "end",
-            "rationale": "Merchant explicitly opted out. Suppressing for 30 days."
-        }
-
-    # === INTENT FAST-TRACK ===
-    positive_intents = ["yes", "han", "haan", "karo", "do it", "let's do it", "ok let's", "confirm", "proceed", "start", "join", "go ahead"]
-    if any(intent in merchant_msg.lower() for intent in positive_intents):
+    elif "auto_reply" in result.get("rationale", "").lower() or "auto-reply" in result.get("rationale", "").lower():
+        history.append({"msg": merchant_msg, "auto_reply": True})
+    else:
         history.append({"msg": merchant_msg, "auto_reply": False})
-        return {
-            "action": "send",
-            "body": "Done! Main abhi process initiate kar rahi hoon. Ek minute dijiye — aapko confirmation milegi.",
-            "cta": "binary_confirm_cancel",
-            "rationale": "Merchant explicitly committed; switched from qualification to action-execution mode."
-        }
-
-    # === OUT-OF-SCOPE CURVEBALL ===
-    out_of_scope = ["gst", "income tax", "loan", "job", "hiring", "legal", "court"]
-    if any(word in merchant_msg.lower() for word in out_of_scope):
-        history.append({"msg": merchant_msg, "auto_reply": False})
-        return {
-            "action": "send",
-            "body": "Yeh cheez meri expertise se bahar hai. Aapke original topic par wapas aate hain — kya aap proceed karna chahte hain?",
-            "cta": "open_ended",
-            "rationale": "Out-of-scope request politely deflected; redirected to original trigger."
-        }
-
-    # === GENERIC CONTINUE (use LLM respond function) ===
-    history.append({"msg": merchant_msg, "auto_reply": False})
-    state = {"history": [h["msg"] for h in history]}
-    result = respond(state, merchant_msg)
-
-    return {
-        "action": "send",
-        "body": result.get("body", "Samajh gayi. Kya aap aage badhna chahte hain?"),
-        "cta": "open_ended",
-        "rationale": "Continuing conversation based on merchant response.",
-    }
+        
+    return result
 
 
 # ─────────────────────────────────────────────

@@ -209,65 +209,75 @@ Write the WhatsApp message now."""
 # Multi-turn reply handler
 # ─────────────────────────────────────────────
 AUTO_REPLY_SIGNATURES = [
-    "thank you for contacting",
-    "our team will respond",
-    "automated assistant",
-    "main ek automated",
-    "aapki jaankari ke liye shukriya",
-    "we will get back to you",
-    "yeh ek swachalit sandesh hai",
-    "this is an automated message",
-    "i am an automated",
-    "hamari team aapse jald",
-]
-
-POSITIVE_INTENTS = [
-    "yes", "haan", "han", "ok", "okay", "karo", "do it",
-    "let's do it", "confirm", "proceed", "start", "join",
-    "go ahead", "bilkul", "zaroor", "sure",
+    "thank you for contacting", "our team will respond", "automated assistant",
+    "main ek automated", "aapki jaankari ke liye shukriya", "we will get back to you",
+    "yeh ek swachalit sandesh hai", "this is an automated message", "i am an automated",
+    "hamari team aapse jald"
 ]
 
 HOSTILE_SIGNALS = [
-    "stop", "not interested", "useless", "spam",
-    "don't message", "mat karo", "band karo", "nahi chahiye",
-    "bothering", "annoying",
+    "not interested", "useless", "spam", "don't message",
+    "mat karo", "band karo", "nahi chahiye", "bothering", "annoying"
 ]
 
-def respond(state: dict, merchant_message: str) -> dict:
-    history = state.get("history", [])
+def handle_reply(history: list, merchant_message: str) -> dict:
     msg_lower = merchant_message.lower()
 
-    # Auto-reply detection
+    # 1. Hostile / STOP detection (Priority 1)
+    words = set(msg_lower.replace(",", " ").replace(".", " ").split())
+    if words.intersection({"stop", "no", "nahi", "quit", "cancel"}) or any(sig in msg_lower for sig in HOSTILE_SIGNALS):
+        return {
+            "action": "end",
+            "rationale": "Merchant explicitly requested to stop or opted out. Terminating conversation."
+        }
+
+    # 2. Auto-reply detection
     if any(sig in msg_lower for sig in AUTO_REPLY_SIGNATURES):
         auto_count = sum(1 for h in history if h.get("auto_reply"))
-        if auto_count >= 2:
-            return {"body": "", "intent": "end", "state_update": {"history": history, "status": "ended"}}
-        if auto_count == 1:
-            return {"body": "", "intent": "wait_24h", "state_update": {"history": history, "status": "waiting"}}
-        history.append({"msg": merchant_message, "auto_reply": True})
+        if auto_count >= 1: # Second auto-reply -> terminate immediately (prevent loop)
+            return {
+                "action": "end",
+                "rationale": "Consecutive auto-replies detected. Terminating to prevent loop."
+            }
         return {
+            "action": "send",
             "body": "Lagta hai auto-reply hai 😊 Jab aap khud dekhen, bas YES type karein.",
-            "intent": "nudge_human",
-            "state_update": {"history": history, "status": "active"},
+            "cta": "binary_yes_no",
+            "rationale": "First auto-reply detected. Sent human prompt."
         }
 
-    # Hostile
-    if any(sig in msg_lower for sig in HOSTILE_SIGNALS):
-        return {"body": "", "intent": "end", "state_update": {"history": history, "status": "ended"}}
+    # 3. Dynamic LLM response for slots/custom replies
+    try:
+        prompt = f"""You are Vera, a WhatsApp AI assistant for Indian merchants.
+The user just replied: "{merchant_message}"
 
-    # Positive intent → action mode
-    if any(intent in msg_lower for intent in POSITIVE_INTENTS):
-        history.append({"msg": merchant_message, "auto_reply": False})
+Rules:
+1. Respond in natural Hinglish.
+2. If they mention a specific slot/date/action (e.g. "book me for Wed 5 Nov"), specifically acknowledge that detail in your reply (e.g. "Wed 5 Nov, 6pm confirmed").
+3. If it's a generic 'yes', say you are initiating the process.
+4. Keep it very short (1-2 sentences).
+5. Output ONLY JSON with these exact keys: {{"action": "send", "body": "...", "cta": "open_ended", "rationale": "..."}}
+"""
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            temperature=0.2,
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        
+        out = response.choices[0].message.content.strip()
+        if out.startswith("```"):
+            out = out.split("```")[1]
+            if out.startswith("json"): out = out[4:]
+            out = out.strip()
+            
+        result = json.loads(out)
+        result["action"] = "send" # Ensure it always sends
+        return result
+    except Exception as e:
         return {
-            "body": "Done! Main abhi process shuru kar rahi hoon. Ek minute dijiye — aapko update milega.",
-            "intent": "action_started",
-            "state_update": {"history": history, "status": "acting"},
+            "action": "send",
+            "body": "Done! Main aage ka process karti hoon.",
+            "cta": "open_ended",
+            "rationale": "Fallback reply due to LLM error."
         }
-
-    # Default continue
-    history.append({"msg": merchant_message, "auto_reply": False})
-    return {
-        "body": "Samajh gayi. Kya aap aage badhna chahte hain?",
-        "intent": "continue",
-        "state_update": {"history": history, "status": "active"},
-    }

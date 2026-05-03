@@ -4,7 +4,7 @@ Full end-to-end conversation test against live Render deployment.
 import json, sys, requests
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-BASE = "https://magicpin-challenge-umamahesh.onrender.com"
+BASE = "http://localhost:8080"
 
 def call(label, method, path, body=None):
     r = requests.request(method, f"{BASE}{path}", json=body, timeout=30)
@@ -83,32 +83,32 @@ print(f"  Send As  : {actions[0].get('send_as','')}")
 print(f"  Rationale: {str(actions[0].get('rationale',''))[:130]}")
 
 # ── Phase 3: Multi-turn replies ───────────────────────────
-call("REPLY — auto-reply detection", "POST", "/v1/reply", {
+call("REPLY — customer slot pick", "POST", "/v1/reply", {
     "conversation_id": conv_id,
     "merchant_id": "m_001_drmeera", "from_role": "merchant",
-    "message": "Thank you for contacting Dr. Meera's Dental Clinic! Our team will respond shortly.",
+    "message": "Yes please book me for Wed 5 Nov, 6pm.",
     "received_at": "2026-05-02T10:42:00Z", "turn_number": 2
 })
 
-call("REPLY — merchant says YES", "POST", "/v1/reply", {
-    "conversation_id": conv_id + "_b",
+call("REPLY — STOP handling", "POST", "/v1/reply", {
+    "conversation_id": conv_id + "_stop",
     "merchant_id": "m_001_drmeera", "from_role": "merchant",
-    "message": "Yes please send the abstract!",
+    "message": "STOP",
     "received_at": "2026-05-02T10:43:00Z", "turn_number": 2
 })
 
-call("REPLY — hostile opt-out", "POST", "/v1/reply", {
-    "conversation_id": conv_id + "_c",
+call("REPLY — Auto-reply detection 1", "POST", "/v1/reply", {
+    "conversation_id": conv_id + "_auto",
     "merchant_id": "m_001_drmeera", "from_role": "merchant",
-    "message": "Stop messaging me. Not interested.",
+    "message": "Thank you for contacting Dr. Meera's Dental Clinic! Our team will respond shortly.",
     "received_at": "2026-05-02T10:44:00Z", "turn_number": 2
 })
 
-call("REPLY — out-of-scope curveball", "POST", "/v1/reply", {
-    "conversation_id": conv_id + "_d",
+call("REPLY — Auto-reply detection 2 (loop prevention)", "POST", "/v1/reply", {
+    "conversation_id": conv_id + "_auto",
     "merchant_id": "m_001_drmeera", "from_role": "merchant",
-    "message": "Can you also help me with my GST filing?",
-    "received_at": "2026-05-02T10:45:00Z", "turn_number": 2
+    "message": "Thank you for contacting Dr. Meera's Dental Clinic! Our team will respond shortly.",
+    "received_at": "2026-05-02T10:45:00Z", "turn_number": 4
 })
 
 print(f"\n{'='*55}")
